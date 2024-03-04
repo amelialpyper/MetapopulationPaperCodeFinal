@@ -1,0 +1,376 @@
+---
+title: "Paramter estimation with death data metapopulation"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+```{r}
+rm(list=ls())
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r}
+c_light <- c("#fee0d2")
+c_mid <- c("#fc9272")
+c_dark <- c("#de2d26")
+c_simu <- "chartreuse3"
+c_posterior = "orange"
+c_prior = "aquamarine2"
+library(formatR)
+library(knitr)
+opts_chunk$set(tidy.opts=list(width.cutoff=100),tidy=TRUE)
+library(tidyverse)
+library(readr)
+library(readxl)
+library(ggplot2)
+library(lubridate)
+library(rstan)
+library(gridExtra)
+library(parallel)
+library(deSolve)
+library(dplyr)
+library(rstanarm)
+library(tidybayes)
+library(latex2exp)
+library(writexl)
+library(bayesplot)
+library(hexbin)
+```
+```{r}
+load("Data/SEIRD_full_results.RData")
+covid_data_leeds <- read_excel("Data/covid_data_leeds_york.xlsx", 
+    sheet = "utla_2023-02-23_leeds", col_types = c("skip", 
+        "skip", "date", "numeric", "numeric", 
+        "numeric", "numeric"))
+covid_data_york <- read_excel("Data/covid_data_leeds_york.xlsx", 
+    sheet = "utla_2023-02-23_york", col_types = c("skip", 
+        "skip", "date", "numeric", "numeric", 
+        "numeric", "numeric"))
+
+covid_data_leeds <- subset(covid_data_leeds,date>= "2020-03-17" & date <= "2020-7-1")
+covid_data_york <- subset(covid_data_york,date>= "2020-03-17" & date <= "2020-7-1")
+
+
+Deaths_cumulative_leeds <- covid_data_leeds$cumDeaths28DaysByDeathDate
+Deaths_leeds <- covid_data_leeds$newDeaths28DaysByDeathDate
+Inf_cumulative_leeds <- covid_data_leeds$cumCasesBySpecimenDate
+Infected_leeds <- covid_data_leeds$newCasesBySpecimenDate 
+
+Deaths_cumulative_york <- covid_data_york$`Cumulative Deaths`
+Deaths_york <- covid_data_york$`New Deaths`
+Inf_cumualtive_york <- covid_data_york$`Cumlative Cases`
+Infected_york <- covid_data_york$`New Cases`
+
+ggplot() +
+    geom_point(data = covid_data_leeds, aes(date, Deaths_cumulative_leeds),colour = 'plum2', size = 2) +
+  geom_point(data = covid_data_york, aes(date, Deaths_cumulative_york),colour = 'red', size = 2)
+```
+```{r}
+rstan_options (auto_write = TRUE)
+options (mc.cores = parallel::detectCores ())
+cl <- parallel::makeCluster(3, setup_strategy = "sequential")
+set.seed(3) # for reproductibility
+
+DeathsL <- Deaths_cumulative_leeds
+DeathsY <- Deaths_cumulative_york
+
+N1 <- 795430 #total leeds population https://worldpopulationreview.com/world-cities/leeds-population
+N2<- 211116 #york estimate for 2020, 2019+2023/2 + 2019 divide by 2 again
+
+# times
+n_days <- length(DeathsL)
+t <- seq(1, n_days, by = 1)
+t0 = 0
+t <- t
+
+#initial conditions
+i01 <- Infected_leeds[1] #no of cases on 17/03
+e01 <- 1
+s01 <- N1 - i01 - e01
+r01 <- 0
+d01 <- DeathsL[1] # no of total deaths on 17/03
+i02 <- Infected_york[1] #no of cases on 17/03
+e02 <- 1
+s02 <- N2 - i02 - e02
+r02 <- 0
+d02 <- DeathsY[1] # no of total deaths on 17/03
+
+y0 = c(S1 = s01,E1 = e01, I1 = i01, R1 = r01, D1=d01,S2 = s02,E2 = e02, I2 = i02, R2 = r02, D=d02)
+date_switch <- "2020-03-23" # date of introduction of control measures
+tswitch <- covid_data_leeds %>% filter(date < date_switch) %>% nrow() + 1 # convert date to number
+# data for Stan
+data_sir <- list(n_days = n_days, y0 = y0, t0 = t0, ts = t, N1 = N1, N2 = N2, newdeaths1 = DeathsL, newdeaths2 = DeathsY,tswitch=tswitch, alphaP12 = 0.0006, alphaP21 = 0.0056,alphaA12 = 0.0034, alphaA21 = 0.0253)
+
+model <- stan_model("SEIRD_full_switch.stan")
+```
+
+```{r}
+testmeta_phase1_samegamma <- sampling(model,
+                data = data_sir,
+                iter = 2000,
+                chains = 1,
+                cores = 1,
+                control = list(max_treedepth = 11))
+
+```
+```{r}
+fullmeta_phase1 <- sampling(model,
+                data = data_sir,
+                iter = 6000,
+                chains = 2,
+                cores = 2,
+                control = list(max_treedepth = 15))
+```
+```{r}
+#show the parameter estimates along with the posterior density plots and the MCMC chains to obsever how well the chains have mixed. 
+library(rstanarm)
+pars=c('betaL','betaY','sigma','sigmaY','gamma', 'gammaY','delta','deltaY', 'nu', 'nuY',"recovery_time","recovery_timeY","phi",'phiY','latent_period','latent_periodY','eta','mu','xi','eta2','mu2','xi2')
+
+# print(seirdleeds_metapopulation_lockdown_phase1_results$testmeta_phase1_samegamma, pars = pars, digits = 5)
+# plot(stan_dens(seirdleeds_metapopulation_lockdown_phase1_results$testmeta_phase1_samegamma, pars = pars, separate_chains = TRUE))
+# plot(seirdleeds_metapopulation_lockdown_phase1_results$testmeta_phase1_samegamma, plotfun = "trace", pars = pars, inc_warmup = FALSE)
+
+
+print(seirdfull_paper_results$fullmeta_phase1, pars = pars, digits = 4)
+
+plot(stan_dens(seirdfull_paper_results$fullmeta_phase1, pars = pars, separate_chains = TRUE))
+
+plot(seirdfull_paper_results$fullmeta_phase1, plotfun = "trace", pars = pars, inc_warmup = FALSE)
+
+np <- nuts_params(seirdfull_paper_results$fullmeta_phase1)
+
+suppressWarnings(mcmc_pairs(seirdfull_paper_results$fullmeta_phase1, pars = c('betaL','betaY','sigma','sigmaY'), off_diag_args = list(size = 1, alpha = 0.5), diag_fun = "dens", off_diag_fun = "hex", condition = pairs_condition(nuts = "accept_stat__"),
+  np = np,np_style = pairs_style_np(
+  div_color = "green",
+  div_shape = 4,
+  div_size = 5)))
+
+mcmc_intervals(seirdfull_paper_results$fullmeta_phase1, pars = c('betaL','betaY','sigma','sigmaY'))
+
+ meta_phase1pars <- as.data.frame(get_posterior_mean(seirdfull_paper_results$fullmeta_phase1,pars)[,3])
+ library(writexl)
+ write_xlsx(meta_phase1pars, "/Users/ameliapyper/Library/CloudStorage/OneDrive-UniversityofLeeds/PhD Prep/Thesis/Matlab/RParameters/seird_full_paper.xlsx", col_names = FALSE)
+```
+```{r}
+#posterior predictive check, how well did our model estimate the data curve.
+ post_predL <- cbind(as.data.frame(summary(seirdfull_paper_results$fullmeta_phase1, pars = "pred_newdeaths1", probs = c(0.025, 0.05, 0.1, 0.5, 0.9, 0.95, 0.975))$summary), t, DeathsL)
+post_predY <- cbind(as.data.frame(summary(seirdfull_paper_results$fullmeta_phase1, pars = "pred_newdeaths2", probs = c(0.025, 0.05, 0.1, 0.5, 0.9, 0.95, 0.975))$summary), t, DeathsY)
+
+colnames(post_predL) <- make.names(colnames(post_predL))
+colnames(post_predY) <- make.names(colnames(post_predY))
+#Deaths_cum = Deaths_cum[1:length(Deaths)-1]
+date <- as.Date(covid_data_leeds$date, format = "%d-%m-%Y")
+lockdown <- tswitch
+#pdf("~/Library/CloudStorage/OneDrive-UniversityofLeeds/PhD Prep/Thesis/3.2NumericalSimulations/ParamEst/meta_postpred_leeds.pdf", width = 10)
+ggplot(post_predL, mapping = aes(x = t)) +
+ geom_ribbon(aes(ymin = X2.5., ymax = X97.5., colour = "grey"), fill = "grey", alpha = 0.6) + 
+ geom_line(mapping = aes(x = t, y = X50., colour = "black")) +
+geom_point(mapping = aes(x = t, y = DeathsL, colour = "red"), size = 0.5) +
+     geom_vline(aes(xintercept = lockdown))+
+   geom_text(aes(x = lockdown-2, y = 300, label="Lockdown"), angle = 90, size=7)+
+  labs(x = "Time Since a Single Death, 17/03/20", y = "Total Deaths") +
+  scale_color_identity(name = "",
+breaks = c("black", "red", "grey","black", "red", "grey"),
+labels = c("Median Fit", "Data Points"," 95% CI","Median Fit", "Data Points"," 95% CI"),
+guide = "legend")+
+  theme(legend.position = "bottom")
+#dev.off()
+
+#pdf("~/Library/CloudStorage/OneDrive-UniversityofLeeds/PhD Prep/Thesis/3.2NumericalSimulations/ParamEst/meta_postpred_york.pdf", width = 10)
+ggplot()+
+ geom_ribbon(data = post_predY, aes(x = t,ymin = X2.5., ymax = X97.5., colour = "grey"), fill = "grey", alpha = 0.6) + 
+ geom_line(data = post_predY, aes(x = t, y = X50., colour = "black")) +
+ geom_point(data = post_predY, aes(x = t, y = DeathsY, colour = "red"), size = 0.5) +
+    geom_vline(aes(xintercept = lockdown))+
+   geom_text(aes(x = lockdown-2, y = 100, label="Lockdown"), angle = 90, size=7)+
+  labs(x = "Time Since a Single Death, 17/03/20", y = "Total Deaths") +
+  scale_color_identity(name = "",
+breaks = c("black", "red", "grey","black", "red", "grey"),
+labels = c("Median Fit", "Data Points"," 95% CI","Median Fit", "Data Points"," 95% CI"),
+guide = "legend")+
+  theme(legend.position = "bottom")
+#dev.off()
+```
+```{r}
+library(tidybayes)
+seirdfull_paper_results$fullmeta_phase1 %>% 
+  spread_draws(ReffY[n_days]) %>% 
+  group_by(n_days) %>% 
+  summarise(R0_mean = mean(ReffY), R09 = quantile(ReffY, 0.95), R01 = quantile(ReffY, 0.05)) %>% 
+   ggplot() +
+   geom_ribbon(aes(x = n_days, ymin = R01, ymax = R09), fill = c_posterior, alpha=0.35)+
+  geom_line(mapping = aes(n_days, R0_mean), color = c_posterior) +
+   geom_vline(aes(xintercept = tswitch))
+seirdleeds_metapopulation_lockdown_phase1_results$fullmeta_phase1_diffgamma %>% 
+  spread_draws(ReffL[n_days]) %>% 
+  group_by(n_days) %>% 
+  summarise(R0_meanL = mean(ReffL), R09L = quantile(ReffL, 0.95), R01L = quantile(ReffL, 0.05)) %>% 
+   ggplot() +
+   geom_ribbon(aes(x = n_days, ymin = R01L, ymax = R09L), fill = c_posterior, alpha=0.35)+
+  geom_line(mapping = aes(n_days, R0_meanL), color = c_posterior) +
+   geom_vline(aes(xintercept = tswitch))
+```
+```{r}
+seirdleeds_metapopulation_lockdown_phase1_results$fullmeta_phase1_diffgamma %>% 
+  spread_draws(beta_switchL[n_days]) %>% 
+  group_by(n_days) %>% 
+  summarise(beta_mean = mean(beta_switchL), beta9 = quantile(beta_switchL, 0.95), beta1 = quantile(beta_switchL, 0.05)) %>% 
+   ggplot() +
+   geom_ribbon(aes(x = n_days, ymin = beta1, ymax = beta9), fill = c_posterior, alpha=0.35)+
+  geom_line(mapping = aes(n_days, beta_mean), color = c_posterior) +
+   geom_vline(aes(xintercept = tswitch))
+
+seirdleeds_metapopulation_lockdown_phase1_results$fullmeta_phase1_diffgamma %>% 
+  spread_draws(beta_switchY[n_days]) %>% 
+  group_by(n_days) %>% 
+  summarise(beta_mean = mean(beta_switchY), beta9 = quantile(beta_switchY, 0.95), beta1 = quantile(beta_switchY, 0.05)) %>% 
+   ggplot() +
+   geom_ribbon(aes(x = n_days, ymin = beta1, ymax = beta9), fill = c_posterior, alpha=0.35)+
+  geom_line(mapping = aes(n_days, beta_mean), color = c_posterior) +
+   geom_vline(aes(xintercept = tswitch))
+```
+
+```{r}
+seird.model <- function (t, x, params) {
+eta <- params["eta"]
+mu <- params["mu"]
+xi <- params["xi"]
+eta2 <- params["eta2"]
+mu2 <- params["mu2"]
+xi2 <- params["xi2"]
+beta <- params["beta"]
+betaY <- params["betaY"]
+gamma <- params["gamma"]
+gammaY <- params["gammaY"]
+nu <- params["nu"]
+nuY <- params["nuY"]
+sigma <- params["sigma"]
+sigmaY <- params["sigmaY"]
+t1 <- params["t1"]
+p_reported <-params["p_reported"]
+p_reportedY <-params["p_reportedY"]
+alphaA12 <- params["alphaA12"]
+alphaA21 <- params["alphaA21"]
+alphaP12 <- params["alphaP12"]
+alphaP21 <- params["alphaP21"]
+delta <- params["delta"]
+deltaY <- params["deltaY"]
+
+S1 = x[1];
+E1 = x[2];
+I1 = x[3];
+R1 = x[4];
+D1 = x[5];
+      
+S2 = x[6];
+E2 = x[7];
+I2 = x[8];
+R2 = x[9];
+D2 = x[10];
+
+betaL_eff <- beta*(eta+((1-eta)/(1+exp(xi*(t-t1-mu)))))# + (eta2 - (1-eta2)/(1+exp(xi2*(t-t2 -mu2)))));
+betaY_eff <- betaY*(eta2+(1-eta2)/(1+exp(xi2*(t-t1-mu2))))
+
+dS1_dt = -betaL_eff * I1 * S1 / N1 - betaL_eff*S1*I2*(alphaA21)/N2 - betaY_eff*S1*I2*(alphaA12)/N2 - betaY_eff*S1*I1*(alphaA12)^2/N1 - delta*S1*alphaP12*(alphaP12*I1/N1 + alphaP21*I2/N2);
+dE1_dt =  betaL_eff * I1 * S1 / N1 + betaL_eff*S1*I2*(alphaA21)/N2 + betaY_eff*S1*I1*(alphaA12)^2/N1 + betaY_eff*S1*I2*(alphaA12)/N2  + delta*S1*alphaP12*(alphaP12*I1/N1 + alphaP21*I2/N2) - nu * E1;
+dI1_dt = nu * E1 - gamma * I1- sigma * I1;
+dR1_dt =  gamma * I1;
+dD1_dt =  sigma * I1 ;
+      
+dS2_dt = -betaY_eff * I2 * S2 / N2 - betaY_eff*S2*I1*(alphaA12)/N1 - betaL_eff*S2*I1*(alphaA21)/N1 - betaL_eff*S2*I2*(alphaA21)^2/N2 - deltaY*S2*alphaP21*(alphaP12*I1/N1 + alphaP21*I2/N2);
+dE2_dt =  betaY_eff * I2 * S2 / N2 + betaY_eff*S2*I1*(alphaA12)/N1 + betaL_eff*S2*I1*(alphaA21)/N1 + betaL_eff*S2*I2*(alphaA21)^2/N2  + deltaY*S2*alphaP21*(alphaP12*I1/N1 + alphaP21*I2/N2) - nuY * E2;
+dI2_dt = nuY * E2 - gammaY * I2 - sigmaY * I2;
+dR2_dt =  gammaY * I2;
+dD2_dt =  sigmaY * I2 ;
+
+list(c(dS1_dt,dE1_dt,dI1_dt,dR1_dt,dD1_dt,dS2_dt,dE2_dt,dI2_dt,dR2_dt,dD2_dt))
+}
+
+beta <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars = 'betaL')[,3]
+gamma <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars = 'gamma')[,3]
+sigma <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars = 'sigma')[,3]
+nu <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars='nu')[,3]
+mu <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars='mu')[,3]
+eta <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars='eta')[,3]
+xi <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars='xi')[,3]
+phi <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars='phi')[,3]
+p_reported <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars = 'p_reported')[,3]
+delta <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars='delta')[,3]
+
+betaY <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars = 'betaY')[,3]
+gammaY <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars = 'gammaY')[,3]
+sigmaY <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars = 'sigmaY')[,3]
+nuY <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars='nuY')[,3]
+mu2 <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars='mu2')[,3]
+eta2 <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars='eta2')[,3]
+xi2 <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars='xi2')[,3]
+phiY <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars='phiY')[,3]
+p_reportedY <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars = 'p_reportedY')[,3]
+deltaY <- get_posterior_mean(seirdfull_paper_results$fullmeta_phase1, pars='deltaY')[,3]
+
+alphaP12 <- 0.0006 
+alphaP21 <- 0.0056
+alphaA12 <- 0.0034 
+alphaA21 <- 0.0253
+
+params <- c(mu=mu,beta=beta,gamma=gamma,sigma=sigma,nu=nu,xi=xi,eta=eta,t1 = tswitch,mu2=mu2,betaY=betaY,gammaY=gammaY,sigmaY=sigmaY,nuY=nuY,xi2=xi2,eta2=eta2,alphaA12 = alphaA12, alphaA21 = alphaA21,alphaP12 = alphaP12, alphaP21 = alphaP21, delta=delta, deltaY=deltaY);
+
+N1 <- 795430 #total leeds population https://worldpopulationreview.com/world-cities/leeds-population
+N2 <- 211116 #york estimate for 2020, 2019+2023/2 + 2019 divide by 2 again
+
+
+# times
+n_days <- length(Deaths_cum_leeds)
+t <- seq(1, n_days, by = 1)
+t0 = 0
+t <- t
+N1 <- N1
+N2 <- N2
+
+i01 <- Infect_leeds[1] #no of total cases on 14/03
+e01 <- 1
+s01 <- N1 - i01 - e01
+r01 <- 0
+d01 <- DeathsL[1] # no of total deaths on 14/03
+i02 <- Infect_york[1] #no of total cases on 14/03
+e02 <- 1
+s02 <- N2 - i02 - e02
+r02 <- 0
+d02 <- DeathsY[1]
+
+xstart <- c(S1 = s01,E1 = e01, I1 = i01, R1 = r01, D1=d01,S2 = s02,E2 = e02, I2 = i02, R2 = r02, D2=d02)
+times <- seq(from=0,to=106,by=1)
+out <- as.data.frame(
+ode(
+func=seird.model,
+y=xstart,
+times=times,
+parms=params
+)
+)
+set.seed(3)
+Death_sol<-rnbinom(seq(from=0,to=106,by=1), mu = out$D1*p_reported, size = phi) 
+Death_solY<- rnbinom(seq(from=0,to=106,by=1), mu = out$D2*p_reportedY, size = phiY) 
+
+Infect_sol<-rnbinom(seq(from=0,to=106,by=1), mu = out$I1*p_reported, size = phi) 
+Infect_solY<- rnbinom(seq(from=0,to=106,by=1), mu = out$I2*p_reportedY, size = phiY) 
+#Death_sol_cum <- cumsum(Death_sol)
+#Death_sol <- smooth(Death_sol)
+#pdf(file = "~/Desktop/OneDrive - University of Leeds/PhD Prep/Thesis/3.2NumericalSimulations/ParamEst/seirdfullmetawithestparams.pdf", width = 10)
+ggplot() +geom_line(data = covid_data_leeds,aes(t,Infect_leeds,colour = 'magenta'), linewidth = 1)+
+    geom_point(data = out, aes(x = time, y = Infect_sol, colour = 'magenta4'), size=1, shape=16) +
+  geom_line(data = covid_data_york,aes(t,Infect_york,colour = 'purple'), linewdith = 1)+
+  geom_point(data = out, aes(x = time, y = Infect_solY, colour = 'purple4'), size = 1, shape = 16) +
+  
+  scale_color_identity(name = "",
+breaks = c("magenta4", "magenta","purple4", "purple"),
+labels = c("Estimated Fit Leeds","Actual Data Leeds","Estimated Fit York","Actual Data York"),
+guide = "legend")+
+  theme(legend.position = "bottom")+
+  labs(x = "Days Since a Single Death, 17/03/20", y = "Total Deaths") +
+  
+  geom_vline(aes(xintercept = tswitch), color = c_mid, linewidth = 1, linetype = 2)+
+   geom_text(aes(x = tswitch-2, y = 300, label="Lockdown Inititated"), angle = 90, size=5,color = c_dark)
+#dev.off()
+```
+
