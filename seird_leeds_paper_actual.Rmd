@@ -136,6 +136,9 @@ suppressWarnings(mcmc_pairs(seird_leeds_paper_results$seird_phase1_preported, pa
 
 mcmc_intervals(seird_leeds_paper_results$seird_phase1_preported, pars = c('beta', 'delta', 'sigma', 'nu'))
 
+#leeds_params <- as.data.frame(get_posterior_mean(seird_leeds_paper_results$seird_phase1_preported,pars)[,5])
+#write_xlsx(leeds_params, "seird_leeds_paper.xlsx", col_names = FALSE)
+
 ## For test sampling
 # print(test, pars = pars, digits = 5)
 # plot(stan_dens(test_leeds, pars = c('beta','sigma', 'gamma','nu',"phi"), separate_chains = TRUE))

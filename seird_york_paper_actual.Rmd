@@ -135,6 +135,9 @@ suppressWarnings(mcmc_pairs(seird_york_paper_results$seird_phase1_preported_york
 
 mcmc_intervals(seird_york_paper_results$seird_phase1_preported_york, pars = c('beta', 'delta', 'sigma', 'nu'))
 
+#york_params <- as.data.frame(get_posterior_mean(seird_york_paper_results$seird_phase1_preported_york,pars)[,5])
+#write_xlsx(york_params, "seird_york_paper.xlsx", col_names = FALSE)
+
 ## For test sampling 
 #pars=c('beta','sigma','gamma','nu', "R0","p_reported", "recovery_time","phi",'latent_period','eta','mu','xi')
 #print(test_york, pars = pars, digits = 5)
