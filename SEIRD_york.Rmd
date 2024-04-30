@@ -1,9 +1,7 @@
 ---
 title: "Paramter estimation with death data"
 output:
-  html_document:
     df_print: paged
-  html_notebook: default
   pdf_document: default
 ---
 ```{r, include=FALSE}
